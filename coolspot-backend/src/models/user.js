@@ -75,7 +75,6 @@ userSchema.virtual('displayName').get(function() {
 // Pre-save middleware
 userSchema.pre('save', auditMiddleware);
 
-// Instance methods
 userSchema.methods.updateStats = async function() {
   const Spot = mongoose.model('Spot');
   const SpotLike = mongoose.model('SpotLike');
@@ -91,7 +90,7 @@ userSchema.methods.updateStats = async function() {
   return this.save();
 };
 
-// Static methods
+// Statics
 userSchema.statics.findByUsernameOrEmail = function(identifier) {
   return this.findOne({
     $or: [

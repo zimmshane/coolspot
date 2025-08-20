@@ -81,7 +81,7 @@ const spotSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Critical geospatial index
+// this index is critial for globe coords
 spotSchema.index({ location: '2dsphere' });
 spotSchema.index({ 
   'visibility.isPublic': 1, 
@@ -101,7 +101,6 @@ spotSchema.index({
 // Pre-save middleware for duplicate detection
 spotSchema.pre('save', geospatialMiddleware);
 
-// Static methods for geospatial queries
 spotSchema.statics.findNearby = function(coordinates, radius = 5000, filters = {}) {
   const query = {
     location: {
@@ -118,7 +117,7 @@ spotSchema.statics.findNearby = function(coordinates, radius = 5000, filters = {
   return this.find(query).populate('creator', 'username profile.displayName');
 };
 
-// Virtual for like count (requires separate SpotLike model)
+// Virtual for like count
 spotSchema.virtual('likeCount', {
   ref: 'SpotLike',
   localField: '_id',

@@ -19,12 +19,12 @@ const spotLikeSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Compound unique index to prevent duplicate likes
+// Compound unique index prevents duplicate likes
 spotLikeSchema.index({ spotId: 1, userId: 1 }, { unique: true });
 spotLikeSchema.index({ userId: 1, likedAt: -1 }); // User's like history
 spotLikeSchema.index({ spotId: 1, likedAt: -1 }); // Spot's likes chronologically
 
-// Static method for toggling likes
+//toggling likes
 spotLikeSchema.statics.toggleLike = async function(spotId, userId) {
   const existingLike = await this.findOne({ spotId, userId });
 
