@@ -10,7 +10,7 @@ function App() {
   // Fetching data is a side effect. This runs once when the component loads.
   useEffect(() => {
     // We fetch from our own backend server's URL!
-    fetch('http://localhost:3001/api/tasks')
+    fetch('http://localhost:3001/')
       .then(response => response.json())
       .then(data => {
         console.log('Tasks fetched from API:', data);

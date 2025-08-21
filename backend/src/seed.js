@@ -1,6 +1,6 @@
 const { MongoClient } = require('mongodb');
 
-const url = ;
+const url = "None";
 const client = new MongoClient(url);
 const dbName = 'spotDB';
 

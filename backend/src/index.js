@@ -4,9 +4,7 @@ const cors = require('cors');
 const { MongoClient } = require('mongodb'); // Import the MongoClient
 
 
-const MONGODB_URI = "NONE"
-const Spot = require('./spot');
-
+const MONGODB_URI = ""
 
 const app = express();
 const port = 3001;
@@ -77,5 +75,8 @@ app.get('/spots/filter', async (req, res) => {
     }
 });
 
+app.listen(port, () => {
+    console.log(`Backend server is running on http://localhost:${port}`);
+});
 
 
