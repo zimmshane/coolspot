@@ -1,6 +1,6 @@
 const { MongoClient } = require('mongodb');
 
-const url = 'mongodb+srv://first_user:gFvZYqlcFELMKVit@coolspot.q2prwro.mongodb.net/?retryWrites=true&w=majority&appName=coolspot';
+const url = ;
 const client = new MongoClient(url);
 const dbName = 'spotDB';
 
