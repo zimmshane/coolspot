@@ -1,37 +1,36 @@
 import React, { useState, useEffect } from 'react';
+import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google';
 import './App.css';
 
-function App() {
-  // 'useState' is a Hook to create a piece of state.
-  // 'tasks' will hold our array of data, and 'setTasks' is the function to update it.
-  const [tasks, setTasks] = useState([]);
 
-  // 'useEffect' is a Hook for running "side effects."
-  // Fetching data is a side effect. This runs once when the component loads.
-  useEffect(() => {
-    // We fetch from our own backend server's URL!
-    fetch('http://localhost:3001/')
-      .then(response => response.json())
-      .then(data => {
-        console.log('Tasks fetched from API:', data);
-        setTasks(data); // Update our state with the data from the API
+
+function App() {
+  const handleGoogleSuccess = async (credentialResponse) => {
+    try {
+      const response = await fetch('http://localhost:3001/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ token: credentialResponse.credential })
       });
-  }, []); // The empty array [] means this effect runs only once.
+
+      const data = await response.json();
+      if (data.success) {
+        // Handle successful login
+        console.log('User logged in:', data.user);
+      }
+    } catch (error) {
+      console.error('Login failed:', error);
+    }
+  };
 
   return (
-    <div className="App">
-      <header className="App-header">
-        <h1>My Task List</h1>
-        <ul className="task-list">
-          {/* We use .map() to loop over the tasks array and create an <li> for each one */}
-          {tasks.map(task => (
-            <li key={task.id}>
-              {task.text}
-            </li>
-          ))}
-        </ul>
-      </header>
-    </div>
+    <GoogleOAuthProvider clientId={process.env.REACT_APP_GOOGLE_CLIENT_ID}>
+      <GoogleLogin
+        onSuccess={handleGoogleSuccess}
+        onError={() => console.log('Login Failed')}
+      />
+    </GoogleOAuthProvider>
   );
 }
 
