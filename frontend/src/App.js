@@ -1,13 +1,14 @@
-import React, { useState, useEffect } from 'react';
 import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google';
-import './App.css';
-
-
 
 function App() {
+  const googleClientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
+  const apiBaseUrl = process.env.REACT_APP_API_BASE_URL;
+
+  console.log('Google Client ID loaded:', googleClientId ? 'Yes' : 'No');
+
   const handleGoogleSuccess = async (credentialResponse) => {
     try {
-      const response = await fetch('http://localhost:3001/auth/google', {
+      const response = await fetch(`${apiBaseUrl}/auth/google`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -16,7 +17,6 @@ function App() {
 
       const data = await response.json();
       if (data.success) {
-        // Handle successful login
         console.log('User logged in:', data.user);
       }
     } catch (error) {
@@ -24,12 +24,19 @@ function App() {
     }
   };
 
+  if (!googleClientId) {
+    console.error('REACT_APP_GOOGLE_CLIENT_ID not found in environment variables');
+    return <div>Configuration error: Missing Google Client ID</div>;
+  }
+
   return (
-    <GoogleOAuthProvider clientId={process.env.REACT_APP_GOOGLE_CLIENT_ID}>
-      <GoogleLogin
-        onSuccess={handleGoogleSuccess}
-        onError={() => console.log('Login Failed')}
-      />
+    <GoogleOAuthProvider clientId={googleClientId}>
+      <div className="App">
+        <GoogleLogin
+          onSuccess={handleGoogleSuccess}
+          onError={() => console.log('Login Failed')}
+        />
+      </div>
     </GoogleOAuthProvider>
   );
 }
