@@ -12,10 +12,6 @@ const { JSDOM } = require('jsdom');
 const createDOMPurify = require('dompurify');
 const validator = require('validator');
 
-
-
-
-
 // Load .env 
 require('dotenv').config({ 
   path: path.join(__dirname, '../back.env') 
@@ -147,9 +143,9 @@ app.post('/auth/google', authLimiter, async (req, res) => {
     const payload = ticket.getPayload();
     const { sub: googleId, email, name, picture } = payload;
 
-    // Store/update user - fix the database access
+    // Store/update user
     const user = await db.collection('users').findOneAndUpdate(
-      { googleId },
+      { googleId},
       { 
         $set: { email, name, picture, firstLogin: new Date(), lastLogin: new Date() }
       },
@@ -199,7 +195,7 @@ app.post('/auth/google', authLimiter, async (req, res) => {
 });
 
 
-  // Session validation middleware
+  // Session validation
 function validateSession(req, res, next) {
   const sessionId = req.cookies.sessionId;
 
@@ -370,15 +366,16 @@ app.post('/api/spots',
       });
 
       // Check for duplicate spots at same location
-      const existingSpot = await db.collection('spots').findOne({
-        coordinates: { $geoWithin: { $centerSphere: [[lng, lat], 0.0001] } }, // ~10 meter radius
+      // Currently broken :(
+     /*  const existingSpot = await db.collection('spots').findOne({
+        coordinates: { $geoWithin: { $centerSphere: [[lng, lat], 0.000001] } }, // ~1 meter radius
         visible: true
       });
 
       if (existingSpot) {
         return res.status(409).json({ error: 'Spot already exists at this location' });
       }
-
+     */
       const newSpot = {
         name: sanitizedName,
         coordinates: [lng, lat],
@@ -635,7 +632,9 @@ app.post('/api/spots/:spotId/comments',
         parent_comment_id: parentCommentObjectId
       };
 
-      const result = await db.collection('comments').insertOne(newComment);
+      const cleanedComment = sanitizeMongoQuery(newComment);
+
+      const result = await db.collection('comments').insertOne(cleanedComment);
 
       res.status(201).json({
         ...newComment,
