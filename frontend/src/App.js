@@ -1,5 +1,59 @@
 import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google';
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, useMapEvent  } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+
+// Custom vivid red icon for map markers
+const vividIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png', // vivid red
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41]
+});
+
+/**
+ * Calculates the Haversine distance (in miles) between two latitude/longitude points.
+ */
+function haversineDistance(lat1, lon1, lat2, lon2) {
+  function toRad(x) { return x * Math.PI / 180; }
+  const R = 3958.8; // miles
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
+
+/**
+ * React-leaflet component that listens for map clicks and updates clicked coordinates in state.
+ */
+function ClickHandler({ setClickedCoords }) {
+  useMapEvent('click', (e) => {
+    setClickedCoords([e.latlng.lat, e.latlng.lng]);
+  });
+  return null;
+}
+
+/**
+ * Calculates a bounding box (min/max lat/lng) around a point for a given radius in miles.
+ */
+function getBoundingBox(lat, lng, miles) {
+  // 1 degree latitude ≈ 69 miles
+  const latDelta = miles / 69;
+  // 1 degree longitude ≈ 69 * cos(latitude in radians)
+  const lngDelta = miles / (69 * Math.cos(lat * Math.PI / 180));
+  return {
+    minLat: lat - latDelta,
+    maxLat: lat + latDelta,
+    minLng: lng - lngDelta,
+    maxLng: lng + lngDelta
+  };
+}
 
 function App() {
   const googleClientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
@@ -12,7 +66,37 @@ function App() {
   const [type, setType] = useState('general');
   const [message, setMessage] = useState('');
 
+  const [spots, setSpots] = useState([]);
+  const [clickedCoords, setClickedCoords] = useState(null);
+
+/**
+   * Fetches all spots from the backend on mount (for initial map display).
+   */
+  useEffect(() => {
+    fetch(`${apiBaseUrl}/api/spots`, { credentials: 'include' })
+      .then(res => res.json())
+      .then(data => setSpots(data.spots || []))
+      .catch(() => setSpots([]));
+  }, [apiBaseUrl]);
+
+ /**
+   * Fetches spots within 1 mile of the clicked coordinates using the bounding box API.
+   * Runs whenever the user clicks on the map.
+   */
+  useEffect(() => {
+    if (!clickedCoords) return;
+    const [lat, lng] = clickedCoords;
+    const bbox = getBoundingBox(lat, lng, 1); // 1 mile
+    fetch(`${apiBaseUrl}/api/spots/bbox?minLng=${bbox.minLng}&minLat=${bbox.minLat}&maxLng=${bbox.maxLng}&maxLat=${bbox.maxLat}`)
+      .then(res => res.json())
+      .then(data => setSpots(Array.isArray(data) ? data : []))
+      .catch(() => setSpots([]));
+  }, [clickedCoords, apiBaseUrl]);
+
   console.log('Google Client ID loaded:', googleClientId ? 'Yes' : 'No');
+  /**
+   * Handles Google login success by sending the credential to the backend for verification.
+   */
 
   const handleGoogleSuccess = async (credentialResponse) => {
     try {
@@ -39,7 +123,9 @@ function App() {
   };
 
 
-
+/**
+   * Handles form submission for adding a new spot to the backend.
+   */
     const handleSubmit = async (e) => {
     e.preventDefault();
     setMessage('');
@@ -81,6 +167,13 @@ function App() {
     return <div>Configuration error: Missing Google Client ID</div>;
   }
 
+  const defaultCenter = clickedCoords
+    ? [clickedCoords[0], clickedCoords[1]]
+    : [37.7749, -122.4194];
+
+
+
+// React code creates the ---User Interface---
   return (
     <GoogleOAuthProvider clientId={googleClientId}>
       <div className="App">
@@ -133,6 +226,53 @@ function App() {
             {message && <p>{message}</p>}
           </>
         )}
+
+        {/* Map container */}
+        <h2>OpenFreeMap</h2>
+        {clickedCoords && (
+          <div style={{ margin: '10px 0', fontWeight: 'bold' }}>
+            Clicked Coordinates: Lat {clickedCoords[0].toFixed(6)}, Lng {clickedCoords[1].toFixed(6)}
+          </div>
+        )}
+
+        <MapContainer center={defaultCenter} zoom={13} style={{ height: "500px", width: "100%" }}>
+          <TileLayer
+            attribution='&copy; <a href="https://osm.org/copyright">OpenStreetMap</a> contributors'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+          <ClickHandler setClickedCoords={setClickedCoords} />
+          {spots.map((spot, idx) => (
+            <Marker
+              key={idx}
+              position={[spot.coordinates[1], spot.coordinates[0]]}
+              icon={vividIcon}
+            >
+              <Popup>
+                <b>{spot.name}</b><br />
+                Type: {spot.type}
+              </Popup>
+            </Marker>
+          ))}
+        </MapContainer>
+
+        {clickedCoords && (
+          <div style={{ marginTop: '20px', padding: '10px', border: '1px solid #ccc', borderRadius: '8px' }}>
+            <h3>Around your clicked coords</h3>
+            {spots.length === 0 ? (
+              <p>No spots within 1 mile.</p>
+            ) : (
+              <ul>
+                {spots.map((spot, idx) => (
+                  <li key={idx}>
+                    <strong>{spot.name}</strong><br />
+                    Lat: {spot.coordinates[1].toFixed(6)}, Lng: {spot.coordinates[0].toFixed(6)}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         {/* Optionally show messages when not logged in */}
         {!loggedIn && message && <p>{message}</p>}
 
