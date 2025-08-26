@@ -68,6 +68,8 @@ function getBoundingBox(lat, lng, miles) {
 }
 
 function App() {
+  const RATING_PREFIX = '__RATING__:';
+
   const googleClientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
   const apiBaseUrl = process.env.REACT_APP_API_BASE_URL;
 
@@ -77,6 +79,15 @@ function App() {
   const [lng, setLng] = useState('');
   const [type, setType] = useState('general');
   const [message, setMessage] = useState('');
+    const [currentUser, setCurrentUser] = useState(() => {
+      try {
+        const raw = localStorage.getItem('ofm_user');
+        return raw ? JSON.parse(raw) : null; 
+      } catch {
+        return null;
+      }
+    });
+  
 
   const [spots, setSpots] = useState([]);
   const [clickedCoords, setClickedCoords] = useState(null);
@@ -124,7 +135,10 @@ function App() {
         console.log('User logged in:', data.user);
         setLoggedIn(true);
         setMessage('Logged in!');
+        setCurrentUser(data.user); // <-- save user (has email/name/picture)
+        try { localStorage.setItem('ofm_user', JSON.stringify(data.user)); } catch {}
       }
+      
       else {
         setMessage('Login failed');
       }
@@ -276,11 +290,13 @@ function App() {
               icon={vividIcon}
             >
               <Popup>
-                <SpotPopup
-                  spot={spot}
-                  apiBaseUrl={apiBaseUrl}
-                  loggedIn={loggedIn}
-                />
+              <SpotPopup
+                spot={spot}
+                apiBaseUrl={apiBaseUrl}
+                loggedIn={loggedIn}
+                currentUser={currentUser}
+              />
+
               </Popup>
 
             </Marker>
@@ -316,11 +332,13 @@ function App() {
 
 
 function SpotPopup({ spot, apiBaseUrl, loggedIn }) {
-  // Ratings are saved as special meta-comments like "__RATING__:4"
-  const RATING_PREFIX = '__RATING__:';
+  // silently hide any old rating meta-comments that might exist in DB
+  const isHiddenMeta = (t) => typeof t === 'string' && t.startsWith('__RATING__:');
 
   const [comments, setComments] = React.useState([]);
   const [newComment, setNewComment] = React.useState('');
+  const [replyOpen, setReplyOpen] = React.useState({}); // { [commentId]: bool }
+  const [replyText, setReplyText] = React.useState({}); // { [commentId]: string }
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState('');
@@ -329,15 +347,17 @@ function SpotPopup({ spot, apiBaseUrl, loggedIn }) {
   const [likeCount, setLikeCount] = React.useState(0);
   const [iLikeIt, setILikeIt] = React.useState(false);
 
-  // Who am I (to filter/update my rating meta-comments)?
+  // Current viewer (for labeling "You")
   const [me, setMe] = React.useState(null); // { googleId }
-  const [myRating, setMyRating] = React.useState(null);
-  const [avgRating, setAvgRating] = React.useState(null);
-  const [ratingCount, setRatingCount] = React.useState(0);
 
-  const spotId = (spot._id && spot._id.toString && spot._id.toString()) || spot.id;
+  // Cache user profiles { [googleId]: {name, email, picture} }
+  const [userMap, setUserMap] = React.useState({});
 
-  // Load profile (only if logged in)
+  const spotId =
+    (spot._id && spot._id.toString && spot._id.toString()) ||
+    spot.id;
+
+  // Load current viewer's googleId (for "You" label)
   React.useEffect(() => {
     if (!loggedIn) return;
     (async () => {
@@ -351,72 +371,73 @@ function SpotPopup({ spot, apiBaseUrl, loggedIn }) {
     })();
   }, [apiBaseUrl, loggedIn]);
 
-  // Load comments + compute ratings-from-comments
+  // Load comments and then fetch missing author profiles via /api/users/:googleId
   const loadComments = React.useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`${apiBaseUrl}/api/spots/${spotId}/comments`, { credentials: 'include' });
+      const res = await fetch(`${apiBaseUrl}/api/spots/${spotId}/comments`, {
+        credentials: 'include'
+      });
       if (!res.ok) throw new Error('Failed to load comments');
+
       const thread = await res.json();
 
-      // flatten threaded comments for simple rendering
+      // Flatten thread while keeping depth for indentation
       const flat = [];
       const walk = (n, depth = 0) => {
         flat.push({ ...n, depth });
         (n.replies || []).forEach(r => walk(r, depth + 1));
       };
       (thread || []).forEach(n => walk(n));
-
       setComments(flat);
 
-      // derive ratings from meta-comments
-      const ratings = flat
-        .filter(c => typeof c.text === 'string' && c.text.startsWith(RATING_PREFIX))
-        .map(c => {
-          const v = parseInt(c.text.slice(RATING_PREFIX.length), 10);
-          return Number.isFinite(v) ? { value: v, user_id: c.user_id, created_at: c.created_at } : null;
-        })
-        .filter(Boolean);
+      // Fetch author profiles we don't have yet (route is auth-protected)
+      const ids = [...new Set(flat.map(c => c.user_id).filter(Boolean))];
+      const missing = ids.filter(id => !userMap[id]);
 
-      if (ratings.length) {
-        const sum = ratings.reduce((s, r) => s + r.value, 0);
-        setAvgRating((sum / ratings.length).toFixed(2));
-        setRatingCount(ratings.length);
-      } else {
-        setAvgRating(null);
-        setRatingCount(0);
-      }
-
-      if (me?.googleId) {
-        const mine = ratings
-          .filter(r => r.user_id === me.googleId)
-          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-        setMyRating(mine ? mine.value : null);
+      if (loggedIn && missing.length) {
+        const results = await Promise.all(
+          missing.map(async (id) => {
+            const r = await fetch(`${apiBaseUrl}/api/users/${encodeURIComponent(id)}`, {
+              credentials: 'include'
+            });
+            if (!r.ok) return [id, null];
+            const { user } = await r.json();
+            return [id, { name: user.name, email: user.email, picture: user.picture }];
+          })
+        );
+        setUserMap(prev => {
+          const next = { ...prev };
+          for (const [id, info] of results) {
+            if (info) next[id] = info;
+          }
+          return next;
+        });
       }
     } catch (e) {
-      setError(e.message || 'Error loading');
+      setError(e.message || 'Error loading comments');
     } finally {
       setLoading(false);
     }
-  }, [apiBaseUrl, spotId, me?.googleId]);
+  }, [apiBaseUrl, spotId, loggedIn]); // don't depend on userMap to avoid extra reloads
 
-  // Load likes (count + whether I like it)
+  // Load likes (count + my status)
   const loadLikes = React.useCallback(async () => {
     try {
-      // count
       const c = await fetch(`${apiBaseUrl}/api/spots/${spotId}/likes`);
       if (c.ok) {
         const { count } = await c.json();
         setLikeCount(count ?? 0);
       }
-      // my like status (needs auth)
       if (loggedIn) {
         const m = await fetch(`${apiBaseUrl}/api/spots/${spotId}/likes/check`, { credentials: 'include' });
         if (m.ok) {
           const { liked } = await m.json();
           setILikeIt(!!liked);
         }
+      } else {
+        setILikeIt(false);
       }
     } catch {/* ignore */}
   }, [apiBaseUrl, spotId, loggedIn]);
@@ -426,7 +447,18 @@ function SpotPopup({ spot, apiBaseUrl, loggedIn }) {
     loadLikes();
   }, [loadComments, loadLikes]);
 
-  // Post a regular comment
+  // Helpers
+  const labelFor = (c) => {
+    const u = userMap[c.user_id];
+    if (u?.email) return u.email;     // ← show email first
+    if (u?.name) return u.name;
+    if (me?.googleId && c.user_id === me.googleId) return 'You';
+    const tail = (c.user_id && String(c.user_id).slice(-6)) || 'user';
+    return `User · ${tail}`;
+  };
+  
+
+  // Actions
   const postComment = async () => {
     if (!loggedIn) return setError('Please sign in to comment.');
     if (!newComment.trim()) return;
@@ -452,47 +484,33 @@ function SpotPopup({ spot, apiBaseUrl, loggedIn }) {
     }
   };
 
-  // Save a 1–5 star rating as a meta-comment
-  const saveRating = async (value) => {
-    if (!loggedIn) return setError('Please sign in to rate.');
+  const postReply = async (parentId) => {
+    if (!loggedIn) return setError('Please sign in to reply.');
+    const text = (replyText[parentId] || '').trim();
+    if (!text) return;
     setSaving(true);
     setError('');
     try {
-      // Best-effort delete my previous rating meta-comments (only my own comments are deletable)
-      if (me?.googleId) {
-        const mine = comments.filter(
-          c => c.user_id === me.googleId && typeof c.text === 'string' && c.text.startsWith(RATING_PREFIX)
-        );
-        for (const c of mine) {
-          try {
-            await fetch(`${apiBaseUrl}/api/comments/${c._id}`, {
-              method: 'DELETE',
-              credentials: 'include'
-            });
-          } catch {/* ignore */}
-        }
-      }
-      // Post new rating meta-comment
       const res = await fetch(`${apiBaseUrl}/api/spots/${spotId}/comments`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: `${RATING_PREFIX}${value}` })
+        body: JSON.stringify({ text, parentCommentId: parentId })
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        throw new Error(d.error || 'Failed to save rating');
+        throw new Error(d.error || 'Failed to post reply');
       }
-      setMyRating(value);
+      setReplyText(prev => ({ ...prev, [parentId]: '' }));
+      setReplyOpen(prev => ({ ...prev, [parentId]: false }));
       await loadComments();
     } catch (e) {
-      setError(e.message || 'Error saving rating');
+      setError(e.message || 'Error posting reply');
     } finally {
       setSaving(false);
     }
   };
 
-  // Toggle like/unlike
   const toggleLike = async () => {
     if (!loggedIn) return setError('Please sign in to like.');
     setSaving(true);
@@ -507,7 +525,6 @@ function SpotPopup({ spot, apiBaseUrl, loggedIn }) {
         const d = await res.json().catch(() => ({}));
         throw new Error(d.error || 'Failed to toggle like');
       }
-      // refresh like count and my status
       await loadLikes();
     } catch (e) {
       setError(e.message || 'Error toggling like');
@@ -516,11 +533,11 @@ function SpotPopup({ spot, apiBaseUrl, loggedIn }) {
     }
   };
 
-  // Hide the rating meta-comments from the visible list
-  const visibleComments = comments.filter(c => !(typeof c.text === 'string' && c.text.startsWith(RATING_PREFIX)));
+  // Hide any old rating meta-comments (keeps UI free of rating mentions)
+  const visibleComments = comments.filter(c => !isHiddenMeta(c.text));
 
   return (
-    <div style={{ minWidth: 260, maxWidth: 320 }}>
+    <div style={{ minWidth: 260, maxWidth: 340 }}>
       <div style={{ marginBottom: 8 }}>
         <strong>{spot.name}</strong><br />
         <small>Type: {spot.type}</small>
@@ -536,37 +553,12 @@ function SpotPopup({ spot, apiBaseUrl, loggedIn }) {
         >
           {iLikeIt ? '♥ Unlike' : '♡ Like'}
         </button>
-        <span style={{ fontSize: 12, opacity: 0.75 }}>{likeCount} like{likeCount === 1 ? '' : 's'}</span>
+        <span style={{ fontSize: 12, opacity: 0.75 }}>
+          {likeCount} like{likeCount === 1 ? '' : 's'}
+        </span>
       </div>
 
-      {/* Rating */}
-      <div style={{ marginBottom: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {[1,2,3,4,5].map(star => (
-            <button
-              key={star}
-              onClick={() => saveRating(star)}
-              disabled={saving || !loggedIn}
-              aria-label={`Rate ${star} star${star>1?'s':''}`}
-              style={{
-                border: 'none',
-                background: 'transparent',
-                cursor: loggedIn ? 'pointer' : 'not-allowed',
-                fontSize: 18,
-                lineHeight: 1
-              }}
-              title={loggedIn ? `Set rating to ${star}` : 'Sign in to rate'}
-            >
-              {(myRating || 0) >= star ? '★' : '☆'}
-            </button>
-          ))}
-          <span style={{ fontSize: 12, opacity: 0.7 }}>
-            {avgRating ? `${avgRating} / 5 (${ratingCount})` : '(no ratings yet)'}
-          </span>
-        </div>
-      </div>
-
-      {/* Comments */}
+      {/* Comments & replies */}
       <div style={{ marginBottom: 6 }}>
         <strong>Comments</strong>
       </div>
@@ -577,19 +569,50 @@ function SpotPopup({ spot, apiBaseUrl, loggedIn }) {
       ) : visibleComments.length === 0 ? (
         <div style={{ fontStyle: 'italic', opacity: 0.7 }}>No comments yet.</div>
       ) : (
-        <ul style={{ listStyle: 'none', padding: 0, margin: 0, maxHeight: 140, overflowY: 'auto' }}>
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0, maxHeight: 180, overflowY: 'auto' }}>
           {visibleComments.map(c => (
-            <li key={c._id} style={{ marginBottom: 6, paddingLeft: c.depth * 10 }}>
-              <div style={{ fontSize: 13 }}>{c.text}</div>
-              <div style={{ fontSize: 11, opacity: 0.6 }}>
-                {new Date(c.created_at).toLocaleString()}
+            <li key={c._id} style={{ marginBottom: 10, paddingLeft: c.depth * 12 }}>
+              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 2 }}>
+                {labelFor(c)} • {new Date(c.created_at).toLocaleString()}
               </div>
+              <div style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>{c.text}</div>
+
+              {/* Reply toggle + box */}
+              <div style={{ marginTop: 4 }}>
+                <button
+                  onClick={() => setReplyOpen(prev => ({ ...prev, [c._id]: !prev[c._id] }))}
+                  disabled={!loggedIn || saving}
+                  style={{ fontSize: 12 }}
+                >
+                  {replyOpen[c._id] ? 'Cancel' : 'Reply'}
+                </button>
+              </div>
+
+              {replyOpen[c._id] && (
+                <div style={{ marginTop: 6 }}>
+                  <textarea
+                    rows={2}
+                    value={replyText[c._id] || ''}
+                    onChange={e => setReplyText(prev => ({ ...prev, [c._id]: e.target.value }))}
+                    placeholder={loggedIn ? 'Write a reply…' : 'Sign in to reply'}
+                    disabled={!loggedIn || saving}
+                    style={{ width: '100%' }}
+                  />
+                  <button
+                    onClick={() => postReply(c._id)}
+                    disabled={!loggedIn || saving || !(replyText[c._id] || '').trim()}
+                    style={{ marginTop: 4 }}
+                  >
+                    Post reply
+                  </button>
+                </div>
+              )}
             </li>
           ))}
         </ul>
       )}
 
-      {/* Add comment */}
+      {/* Add new top-level comment */}
       <div style={{ marginTop: 8 }}>
         <textarea
           rows={2}
@@ -599,7 +622,11 @@ function SpotPopup({ spot, apiBaseUrl, loggedIn }) {
           disabled={!loggedIn || saving}
           style={{ width: '100%' }}
         />
-        <button onClick={postComment} disabled={!loggedIn || saving || !newComment.trim()} style={{ marginTop: 6 }}>
+        <button
+          onClick={postComment}
+          disabled={!loggedIn || saving || !newComment.trim()}
+          style={{ marginTop: 6 }}
+        >
           Post
         </button>
       </div>
