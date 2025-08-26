@@ -267,6 +267,109 @@ app.get('/api/spots/bbox', async (req, res) => {
   }
 });
 
+// Get top N spots within bounding box, sorted by likes 
+app.get('/api/spots/bbox/top',
+  generalLimiter,
+  [
+    query('minLng').isFloat().withMessage('minLng must be a number'),
+    query('minLat').isFloat().withMessage('minLat must be a number'),
+    query('maxLng').isFloat().withMessage('maxLng must be a number'),
+    query('maxLat').isFloat().withMessage('maxLat must be a number'),
+    query('n')
+      .optional()
+      .isInt({ min: 1, max: 50 })
+      .withMessage('n must be between 1 and 50')
+  ],
+  validateAndSanitize,
+  async (req, res) => {
+    try {
+      const { minLng, minLat, maxLng, maxLat, n = 5 } = req.query;
+
+      // Validate coordinate ranges
+      const coords = {
+        minLng: parseFloat(minLng),
+        minLat: parseFloat(minLat),
+        maxLng: parseFloat(maxLng),
+        maxLat: parseFloat(maxLat)
+      };
+
+      if (coords.minLng < -180 || coords.maxLng > 180 || 
+          coords.minLat < -90 || coords.maxLat > 90) {
+        return res.status(400).json({ error: 'Invalid coordinate range' });
+      }
+
+      if (coords.minLng >= coords.maxLng || coords.minLat >= coords.maxLat) {
+        return res.status(400).json({ error: 'Invalid bounding box' });
+      }
+
+      const limit = parseInt(n);
+
+
+      const pipeline = [
+        // Match spots within bounding box
+        {
+          $match: {
+            visible: true,
+            coordinates: {
+              $geoWithin: {
+                $box: [
+                  [coords.minLng, coords.minLat], 
+                  [coords.maxLng, coords.maxLat]
+                ]
+              }
+            }
+          }
+        },
+        //join spots with likes on spotid
+        {
+          $lookup: {
+            from: 'likes',
+            localField: '_id',
+            foreignField: 'spot_id',
+            as: 'likes'
+          }
+        },
+        // Add computed field for like count
+        {
+          $addFields: {
+            likeCount: { $size: '$likes' }
+          }
+        },
+        // Remove the likes array (we only need the count)
+        {
+          $project: {
+            likes: 0
+          }
+        },
+        // Sort by like count, then by creation date (newest first)
+        {
+          $sort: {
+            likeCount: -1,
+            created_on: -1
+          }
+        },
+        // Limit to top N results
+        {
+          $limit: limit
+        }
+      ];
+
+      const spots = await db.collection('spots').aggregate(pipeline).toArray();
+
+      res.json({
+        spots,
+        count: spots.length,
+        limit: limit
+      });
+
+    } catch (error) {
+      console.error('Error fetching top spots:', error);
+      res.status(500).json({ error: 'Failed to fetch top spots' });
+    }
+  }
+);
+
+
 //Get specific spot by ID
 app.get('/api/spots/:id', async (req, res) => {
   try {
@@ -366,7 +469,7 @@ app.post('/api/spots',
       });
 
       // Check for duplicate spots at same location
-      // Currently broken :(
+      // Currently BROKEN :(
      /*  const existingSpot = await db.collection('spots').findOne({
         coordinates: { $geoWithin: { $centerSphere: [[lng, lat], 0.000001] } }, // ~1 meter radius
         visible: true
@@ -391,6 +494,61 @@ app.post('/api/spots',
     } catch (error) {
       console.error('Error creating spot:', error);
       res.status(500).json({ error: 'Failed to create spot' });
+    }
+  }
+);
+
+// Delete spot (soft delete - creator only)
+app.delete('/api/spots/:spotId',
+  validateSession,
+  generalLimiter,
+  [
+    param('spotId').isMongoId().withMessage('Invalid spot ID')
+  ],
+  validateAndSanitize,
+  async (req, res) => {
+    try {
+      const spotId = new ObjectId(req.params.spotId);
+
+      // Find the spot and verify it exists and is visible
+      const spot = await db.collection('spots').findOne({ 
+        _id: spotId, 
+        visible: true 
+      });
+
+      if (!spot) {
+        return res.status(404).json({ error: 'Spot not found' });
+      }
+
+      // Verify the current user is the creator
+      if (spot.creator_id !== req.user.googleId) {
+        return res.status(403).json({ error: 'Only the creator can delete this spot' });
+      }
+
+      // Soft delete: mark as invisible instead of removing
+      const result = await db.collection('spots').updateOne(
+        { _id: spotId },
+        { 
+          $set: { 
+            visible: false, 
+            deleted_at: new Date(),
+            deleted_by: req.user.googleId
+          } 
+        }
+      );
+
+      if (result.matchedCount === 0) {
+        return res.status(404).json({ error: 'Spot not found' });
+      }
+
+      res.json({ 
+        success: true, 
+        message: 'Spot deleted successfully' 
+      });
+
+    } catch (error) {
+      console.error('Error deleting spot:', error);
+      res.status(500).json({ error: 'Failed to delete spot' });
     }
   }
 );
@@ -686,6 +844,77 @@ app.delete('/api/comments/:commentId', validateSession, async (req, res) => {
     res.status(500).json({ error: 'Failed to delete comment' });
   }
 });
+
+// USER API
+
+// Get user data by Google ID
+app.get('/api/users/:googleId',
+  validateSession,
+  generalLimiter,
+  [
+    param('googleId')
+      .isLength({ min: 1, max: 50 })
+      .matches(/^[0-9]+$/)
+      .withMessage('Invalid Google ID format')
+  ],
+  validateAndSanitize,
+  async (req, res) => {
+    try {
+      const { googleId } = req.params;
+
+      // Find user by Google ID
+      const user = await db.collection('users').findOne(
+        { googleId: googleId },
+        {
+          // Project only safe, public fields
+          projection: {
+            _id: 1,
+            googleId: 1,
+            email: 1,
+            name: 1,
+            picture: 1,
+            created_on: 1,
+            // Exclude sensitive fields
+            refreshToken: 0,
+            accessToken: 0
+          }
+        }
+      );
+
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      // User stats
+      const [spotsCount, likesCount] = await Promise.all([
+        // Count spots created by this user
+        db.collection('spots').countDocuments({
+          creator_id: googleId,
+          visible: true
+        }),
+        // Count likes given by this user
+        db.collection('likes').countDocuments({
+          user_id: googleId
+        })
+      ]);
+
+      // put it all together
+      const userData = {
+        ...user,
+        statistics: {
+          spotsCreated: spotsCount,
+          likesGiven: likesCount
+        }
+      };
+
+      res.json({ user: userData });
+
+    } catch (error) {
+      console.error('Error fetching user data:', error);
+      res.status(500).json({ error: 'Failed to fetch user data' });
+    }
+  }
+);
 
 
 // HELPERS
