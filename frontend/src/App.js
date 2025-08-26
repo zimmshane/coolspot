@@ -1,5 +1,5 @@
 import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMapEvent  } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -66,6 +66,93 @@ function getBoundingBox(lat, lng, miles) {
     maxLng: lng + lngDelta
   };
 }
+
+function FilterPanel({ spots }) {
+  // category checkboxes (client-side only)
+  const CATEGORIES = ['general', 'landmark', 'cafe', 'park', 'study', 'food'];
+
+  const [pending, setPending] = React.useState(new Set());   // boxes currently checked
+  const [applied, setApplied] = React.useState(new Set());   // what the list uses
+
+  const toggle = (cat) => {
+    setPending(prev => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
+      return next;
+    });
+  };
+
+  const apply = () => setApplied(new Set(pending));
+  const clear = () => { setPending(new Set()); setApplied(new Set()); };
+
+  // if no category is applied, show all spots
+  const filtered = useMemo(() => {
+    if (!applied || applied.size === 0) return spots;
+    return spots.filter(s => applied.has((s?.type || 'general')));
+  }, [spots, applied]);
+
+  return (
+    <aside
+      style={{
+        width: 280,
+        minWidth: 280,
+        maxHeight: 520,
+        border: '1px solid #ddd',
+        borderRadius: 10,
+        padding: 12,
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        background: '#fff'
+      }}
+    >
+      <div style={{ fontWeight: 700, fontSize: 16 }}>Filter</div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', rowGap: 6, columnGap: 8 }}>
+        {CATEGORIES.map(cat => (
+          <label key={cat} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14 }}>
+            <input
+              type="checkbox"
+              checked={pending.has(cat)}
+              onChange={() => toggle(cat)}
+            />
+            {cat.charAt(0).toUpperCase() + cat.slice(1)}
+          </label>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={apply}>Search</button>
+        <button onClick={clear} disabled={pending.size === 0 && applied.size === 0}>Clear</button>
+      </div>
+
+      <div style={{ fontWeight: 600, marginTop: 4 }}>
+        Results {applied.size > 0 ? `(${Array.from(applied).join(', ')})` : '(All)'} — {filtered.length}
+      </div>
+
+      {/* Names-only list */}
+      <div style={{ overflowY: 'auto', border: '1px solid #eee', borderRadius: 8, padding: 8 }}>
+        {filtered.length === 0 ? (
+          <div style={{ opacity: 0.7, fontStyle: 'italic' }}>No spots.</div>
+        ) : (
+          <ul style={{ margin: 0, paddingLeft: 16 }}>
+            {filtered.map((spot, idx) => (
+              <li
+                key={(spot._id && spot._id.toString && spot._id.toString()) || spot.id || idx}
+                style={{ marginBottom: 6 }}
+              >
+                {spot.name}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </aside>
+  );
+}
+
 
 function App() {
   const RATING_PREFIX = '__RATING__:';
@@ -262,45 +349,53 @@ function App() {
         )}
 
         <MapContainer center={defaultCenter} zoom={13} style={{ height: "500px", width: "100%" }}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+  {/* LEFT: filter panel (names only) */}
+  <FilterPanel spots={spots} />
 
-          <TileLayer
-            attribution='&copy; <a href="https://osm.org/copyright">OpenStreetMap</a> contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
+  {/* RIGHT: your original map */}
+  <div style={{ flex: 1 }}>
+    <MapContainer center={defaultCenter} zoom={13} style={{ height: "500px", width: "100%" }}>
+      <TileLayer
+        attribution='&copy; <a href="https://osm.org/copyright">OpenStreetMap</a> contributors'
+        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+      />
 
-          <ClickHandler 
-          setClickedCoords={setClickedCoords} 
-          setLat={setLat} 
-          setLng={setLng} />
+      <ClickHandler
+        setClickedCoords={setClickedCoords}
+        setLat={setLat}
+        setLng={setLng}
+      />
 
-          {clickedCoords && (
-            <Marker position={clickedCoords} icon={yellowIcon}>
-              <Popup autoOpen={true}>
-                <b>Selected Location</b><br />
-                Lat: {clickedCoords[0].toFixed(6)}<br />
-                Lng: {clickedCoords[1].toFixed(6)}
-              </Popup>
-            </Marker>
-          )}
+      {clickedCoords && (
+        <Marker position={clickedCoords} icon={yellowIcon}>
+          <Popup autoOpen={true}>
+            <b>Selected Location</b><br />
+            Lat: {clickedCoords[0].toFixed(6)}<br />
+            Lng: {clickedCoords[1].toFixed(6)}
+          </Popup>
+        </Marker>
+      )}
 
-          {spots.map((spot, idx) => (
-            <Marker
-              key={(spot._id && spot._id.toString && spot._id.toString()) || spot.id || idx}
-              position={[spot.coordinates[1], spot.coordinates[0]]}
-              icon={vividIcon}
-            >
-              <Popup>
-              <SpotPopup
-                spot={spot}
-                apiBaseUrl={apiBaseUrl}
-                loggedIn={loggedIn}
-                currentUser={currentUser}
-              />
-
-              </Popup>
-
-            </Marker>
-          ))}
+      {spots.map((spot, idx) => (
+        <Marker
+          key={(spot._id && spot._id.toString && spot._id.toString()) || spot.id || idx}
+          position={[spot.coordinates[1], spot.coordinates[0]]}
+          icon={vividIcon}
+        >
+          <Popup>
+            <SpotPopup
+              spot={spot}
+              apiBaseUrl={apiBaseUrl}
+              loggedIn={loggedIn}
+              currentUser={currentUser}
+            />
+          </Popup>
+        </Marker>
+      ))}
+    </MapContainer>
+  </div>
+</div>
 
         </MapContainer>
 
