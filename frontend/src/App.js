@@ -243,16 +243,20 @@ function App() {
           <ClickHandler setClickedCoords={setClickedCoords} />
           {spots.map((spot, idx) => (
             <Marker
-              key={idx}
+              key={(spot._id && spot._id.toString && spot._id.toString()) || spot.id || idx}
               position={[spot.coordinates[1], spot.coordinates[0]]}
               icon={vividIcon}
             >
               <Popup>
-                <b>{spot.name}</b><br />
-                Type: {spot.type}
+                <SpotPopup
+                  spot={spot}
+                  apiBaseUrl={apiBaseUrl}
+                  loggedIn={loggedIn}
+                />
               </Popup>
             </Marker>
           ))}
+
         </MapContainer>
 
         {clickedCoords && (
@@ -280,5 +284,300 @@ function App() {
     </GoogleOAuthProvider>
   );
 }
+
+
+function SpotPopup({ spot, apiBaseUrl, loggedIn }) {
+  // Ratings are saved as special meta-comments like "__RATING__:4"
+  const RATING_PREFIX = '__RATING__:';
+
+  const [comments, setComments] = React.useState([]);
+  const [newComment, setNewComment] = React.useState('');
+  const [loading, setLoading] = React.useState(true);
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState('');
+
+  // Likes
+  const [likeCount, setLikeCount] = React.useState(0);
+  const [iLikeIt, setILikeIt] = React.useState(false);
+
+  // Who am I (to filter/update my rating meta-comments)?
+  const [me, setMe] = React.useState(null); // { googleId }
+  const [myRating, setMyRating] = React.useState(null);
+  const [avgRating, setAvgRating] = React.useState(null);
+  const [ratingCount, setRatingCount] = React.useState(0);
+
+  const spotId = (spot._id && spot._id.toString && spot._id.toString()) || spot.id;
+
+  // Load profile (only if logged in)
+  React.useEffect(() => {
+    if (!loggedIn) return;
+    (async () => {
+      try {
+        const res = await fetch(`${apiBaseUrl}/api/profile`, { credentials: 'include' });
+        if (res.ok) {
+          const data = await res.json();
+          setMe({ googleId: data.user.googleId });
+        }
+      } catch {/* ignore */}
+    })();
+  }, [apiBaseUrl, loggedIn]);
+
+  // Load comments + compute ratings-from-comments
+  const loadComments = React.useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/spots/${spotId}/comments`, { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to load comments');
+      const thread = await res.json();
+
+      // flatten threaded comments for simple rendering
+      const flat = [];
+      const walk = (n, depth = 0) => {
+        flat.push({ ...n, depth });
+        (n.replies || []).forEach(r => walk(r, depth + 1));
+      };
+      (thread || []).forEach(n => walk(n));
+
+      setComments(flat);
+
+      // derive ratings from meta-comments
+      const ratings = flat
+        .filter(c => typeof c.text === 'string' && c.text.startsWith(RATING_PREFIX))
+        .map(c => {
+          const v = parseInt(c.text.slice(RATING_PREFIX.length), 10);
+          return Number.isFinite(v) ? { value: v, user_id: c.user_id, created_at: c.created_at } : null;
+        })
+        .filter(Boolean);
+
+      if (ratings.length) {
+        const sum = ratings.reduce((s, r) => s + r.value, 0);
+        setAvgRating((sum / ratings.length).toFixed(2));
+        setRatingCount(ratings.length);
+      } else {
+        setAvgRating(null);
+        setRatingCount(0);
+      }
+
+      if (me?.googleId) {
+        const mine = ratings
+          .filter(r => r.user_id === me.googleId)
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+        setMyRating(mine ? mine.value : null);
+      }
+    } catch (e) {
+      setError(e.message || 'Error loading');
+    } finally {
+      setLoading(false);
+    }
+  }, [apiBaseUrl, spotId, me?.googleId]);
+
+  // Load likes (count + whether I like it)
+  const loadLikes = React.useCallback(async () => {
+    try {
+      // count
+      const c = await fetch(`${apiBaseUrl}/api/spots/${spotId}/likes`);
+      if (c.ok) {
+        const { count } = await c.json();
+        setLikeCount(count ?? 0);
+      }
+      // my like status (needs auth)
+      if (loggedIn) {
+        const m = await fetch(`${apiBaseUrl}/api/spots/${spotId}/likes/check`, { credentials: 'include' });
+        if (m.ok) {
+          const { liked } = await m.json();
+          setILikeIt(!!liked);
+        }
+      }
+    } catch {/* ignore */}
+  }, [apiBaseUrl, spotId, loggedIn]);
+
+  React.useEffect(() => {
+    loadComments();
+    loadLikes();
+  }, [loadComments, loadLikes]);
+
+  // Post a regular comment
+  const postComment = async () => {
+    if (!loggedIn) return setError('Please sign in to comment.');
+    if (!newComment.trim()) return;
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/spots/${spotId}/comments`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: newComment })
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || 'Failed to post comment');
+      }
+      setNewComment('');
+      await loadComments();
+    } catch (e) {
+      setError(e.message || 'Error posting comment');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Save a 1–5 star rating as a meta-comment
+  const saveRating = async (value) => {
+    if (!loggedIn) return setError('Please sign in to rate.');
+    setSaving(true);
+    setError('');
+    try {
+      // Best-effort delete my previous rating meta-comments (only my own comments are deletable)
+      if (me?.googleId) {
+        const mine = comments.filter(
+          c => c.user_id === me.googleId && typeof c.text === 'string' && c.text.startsWith(RATING_PREFIX)
+        );
+        for (const c of mine) {
+          try {
+            await fetch(`${apiBaseUrl}/api/comments/${c._id}`, {
+              method: 'DELETE',
+              credentials: 'include'
+            });
+          } catch {/* ignore */}
+        }
+      }
+      // Post new rating meta-comment
+      const res = await fetch(`${apiBaseUrl}/api/spots/${spotId}/comments`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: `${RATING_PREFIX}${value}` })
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || 'Failed to save rating');
+      }
+      setMyRating(value);
+      await loadComments();
+    } catch (e) {
+      setError(e.message || 'Error saving rating');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Toggle like/unlike
+  const toggleLike = async () => {
+    if (!loggedIn) return setError('Please sign in to like.');
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/spots/${spotId}/likes`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || 'Failed to toggle like');
+      }
+      // refresh like count and my status
+      await loadLikes();
+    } catch (e) {
+      setError(e.message || 'Error toggling like');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Hide the rating meta-comments from the visible list
+  const visibleComments = comments.filter(c => !(typeof c.text === 'string' && c.text.startsWith(RATING_PREFIX)));
+
+  return (
+    <div style={{ minWidth: 260, maxWidth: 320 }}>
+      <div style={{ marginBottom: 8 }}>
+        <strong>{spot.name}</strong><br />
+        <small>Type: {spot.type}</small>
+      </div>
+
+      {/* Likes */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <button
+          onClick={toggleLike}
+          disabled={!loggedIn || saving}
+          title={loggedIn ? (iLikeIt ? 'Unlike' : 'Like') : 'Sign in to like'}
+          style={{ cursor: loggedIn ? 'pointer' : 'not-allowed' }}
+        >
+          {iLikeIt ? '♥ Unlike' : '♡ Like'}
+        </button>
+        <span style={{ fontSize: 12, opacity: 0.75 }}>{likeCount} like{likeCount === 1 ? '' : 's'}</span>
+      </div>
+
+      {/* Rating */}
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {[1,2,3,4,5].map(star => (
+            <button
+              key={star}
+              onClick={() => saveRating(star)}
+              disabled={saving || !loggedIn}
+              aria-label={`Rate ${star} star${star>1?'s':''}`}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                cursor: loggedIn ? 'pointer' : 'not-allowed',
+                fontSize: 18,
+                lineHeight: 1
+              }}
+              title={loggedIn ? `Set rating to ${star}` : 'Sign in to rate'}
+            >
+              {(myRating || 0) >= star ? '★' : '☆'}
+            </button>
+          ))}
+          <span style={{ fontSize: 12, opacity: 0.7 }}>
+            {avgRating ? `${avgRating} / 5 (${ratingCount})` : '(no ratings yet)'}
+          </span>
+        </div>
+      </div>
+
+      {/* Comments */}
+      <div style={{ marginBottom: 6 }}>
+        <strong>Comments</strong>
+      </div>
+      {loading ? (
+        <div>Loading…</div>
+      ) : error ? (
+        <div style={{ color: 'crimson' }}>{error}</div>
+      ) : visibleComments.length === 0 ? (
+        <div style={{ fontStyle: 'italic', opacity: 0.7 }}>No comments yet.</div>
+      ) : (
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0, maxHeight: 140, overflowY: 'auto' }}>
+          {visibleComments.map(c => (
+            <li key={c._id} style={{ marginBottom: 6, paddingLeft: c.depth * 10 }}>
+              <div style={{ fontSize: 13 }}>{c.text}</div>
+              <div style={{ fontSize: 11, opacity: 0.6 }}>
+                {new Date(c.created_at).toLocaleString()}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* Add comment */}
+      <div style={{ marginTop: 8 }}>
+        <textarea
+          rows={2}
+          value={newComment}
+          onChange={e => setNewComment(e.target.value)}
+          placeholder={loggedIn ? 'Write a comment…' : 'Sign in to comment'}
+          disabled={!loggedIn || saving}
+          style={{ width: '100%' }}
+        />
+        <button onClick={postComment} disabled={!loggedIn || saving || !newComment.trim()} style={{ marginTop: 6 }}>
+          Post
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
 
 export default App;
