@@ -4,9 +4,19 @@ import { MapContainer, TileLayer, Marker, Popup, useMapEvent  } from 'react-leaf
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// Custom vivid red icon for map markers
+// Custom vivid RED icon for map markers
 const vividIcon = new L.Icon({
   iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png', // vivid red
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41]
+});
+
+//Yellow Icon
+const yellowIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-yellow.png',
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
   iconSize: [25, 41],
   iconAnchor: [12, 41],
@@ -32,9 +42,11 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
 /**
  * React-leaflet component that listens for map clicks and updates clicked coordinates in state.
  */
-function ClickHandler({ setClickedCoords }) {
+function ClickHandler({ setClickedCoords, setLat, setLng }) {
   useMapEvent('click', (e) => {
     setClickedCoords([e.latlng.lat, e.latlng.lng]);
+    setLat(e.latlng.lat.toFixed(7));
+    setLng(e.latlng.lng.toFixed(7));
   });
   return null;
 }
@@ -169,7 +181,7 @@ function App() {
 
   const defaultCenter = clickedCoords
     ? [clickedCoords[0], clickedCoords[1]]
-    : [37.7749, -122.4194];
+    : [33.973604, -117.328175];
 
 
 
@@ -236,11 +248,27 @@ function App() {
         )}
 
         <MapContainer center={defaultCenter} zoom={13} style={{ height: "500px", width: "100%" }}>
+
           <TileLayer
             attribution='&copy; <a href="https://osm.org/copyright">OpenStreetMap</a> contributors'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
-          <ClickHandler setClickedCoords={setClickedCoords} />
+
+          <ClickHandler 
+          setClickedCoords={setClickedCoords} 
+          setLat={setLat} 
+          setLng={setLng} />
+
+          {clickedCoords && (
+            <Marker position={clickedCoords} icon={yellowIcon}>
+              <Popup autoOpen={true}>
+                <b>Selected Location</b><br />
+                Lat: {clickedCoords[0].toFixed(6)}<br />
+                Lng: {clickedCoords[1].toFixed(6)}
+              </Popup>
+            </Marker>
+          )}
+
           {spots.map((spot, idx) => (
             <Marker
               key={(spot._id && spot._id.toString && spot._id.toString()) || spot.id || idx}
@@ -254,6 +282,7 @@ function App() {
                   loggedIn={loggedIn}
                 />
               </Popup>
+
             </Marker>
           ))}
 
