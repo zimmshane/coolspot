@@ -187,8 +187,25 @@ function App() {
 
 // React code creates the ---User Interface---
   return (
+
+    
+
     <GoogleOAuthProvider clientId={googleClientId}>
+
       <div className="App">
+
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '24px'}}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <img src="/compass.jpeg" alt="Compass" style={{ width: '40px', height: '40px' }} />
+          <h1 style={{ margin: 0, color: '#e5fb1dff', fontSize: '10rem'  }}>CoolSpot</h1>
+        </div>
+        <div style={{ fontSize: '1rem', color: '#555', marginTop: '4px' }}>
+          Discover cool spots authentically
+        </div>
+      </div>
+
+        {!loggedIn && <h2>You must be logged in to access features</h2>}
+
         <GoogleLogin
           onSuccess={handleGoogleSuccess}
           onError={() => console.log('Login Failed')}
