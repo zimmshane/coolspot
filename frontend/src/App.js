@@ -1,5 +1,5 @@
 import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google';
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMapEvent  } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -67,7 +67,7 @@ function getBoundingBox(lat, lng, miles) {
   };
 }
 
-function FilterPanel({ spots }) {
+function FilterPanel({ spots, onSelectSpot, collapsed, setCollapsed }) {
   // category checkboxes (client-side only)
   const CATEGORIES = ['general', 'landmark', 'cafe', 'park', 'study', 'food'];
 
@@ -92,6 +92,37 @@ function FilterPanel({ spots }) {
     return spots.filter(s => applied.has((s?.type || 'general')));
   }, [spots, applied]);
 
+  // Collapsed (mini) view
+  if (collapsed) {
+    return (
+      <aside
+        style={{
+          width: 44,
+          minWidth: 44,
+          maxHeight: 520,
+          border: '1px solid #ddd',
+          borderRadius: 10,
+          padding: 6,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 8,
+          background: '#fff'
+        }}
+        title="Expand filter panel"
+      >
+        <button onClick={() => setCollapsed(false)} aria-label="Expand" title="Expand"
+          style={{ width: 28, height: 28 }}>
+          ❯
+        </button>
+        <div style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: 12, opacity: 0.7 }}>
+          Filter
+        </div>
+      </aside>
+    );
+  }
+
+  // Expanded view
   return (
     <aside
       style={{
@@ -108,7 +139,13 @@ function FilterPanel({ spots }) {
         background: '#fff'
       }}
     >
-      <div style={{ fontWeight: 700, fontSize: 16 }}>Filter</div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ fontWeight: 700, fontSize: 16 }}>Filter</div>
+        <button onClick={() => setCollapsed(true)} aria-label="Collapse" title="Collapse"
+          style={{ width: 28, height: 28 }}>
+          ❮
+        </button>
+      </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', rowGap: 6, columnGap: 8 }}>
         {CATEGORIES.map(cat => (
@@ -132,7 +169,7 @@ function FilterPanel({ spots }) {
         Results {applied.size > 0 ? `(${Array.from(applied).join(', ')})` : '(All)'} — {filtered.length}
       </div>
 
-      {/* Names-only list */}
+      {/* Names-only list (CLICKABLE) */}
       <div style={{ overflowY: 'auto', border: '1px solid #eee', borderRadius: 8, padding: 8 }}>
         {filtered.length === 0 ? (
           <div style={{ opacity: 0.7, fontStyle: 'italic' }}>No spots.</div>
@@ -141,7 +178,13 @@ function FilterPanel({ spots }) {
             {filtered.map((spot, idx) => (
               <li
                 key={(spot._id && spot._id.toString && spot._id.toString()) || spot.id || idx}
-                style={{ marginBottom: 6 }}
+                onClick={() => onSelectSpot(spot)}
+                style={{
+                  marginBottom: 6,
+                  cursor: 'pointer',
+                  userSelect: 'none'
+                }}
+                title="Show on map"
               >
                 {spot.name}
               </li>
@@ -152,6 +195,7 @@ function FilterPanel({ spots }) {
     </aside>
   );
 }
+
 
 
 function App() {
@@ -178,6 +222,30 @@ function App() {
 
   const [spots, setSpots] = useState([]);
   const [clickedCoords, setClickedCoords] = useState(null);
+    // Map + marker refs, and panel collapse state
+  const mapRef = useRef(null);
+  const markerRefs = useRef({});     // { [id]: L.Marker }
+  const [panelCollapsed, setPanelCollapsed] = useState(false);
+
+  // Focus a spot on the map and open its popup
+  const focusSpot = (spot) => {
+    if (!spot) return;
+    const lat = spot.coordinates[1];
+    const lng = spot.coordinates[0];
+    if (mapRef.current) {
+      // smooth pan/zoom
+      mapRef.current.flyTo([lat, lng], Math.max(mapRef.current.getZoom(), 16), { duration: 0.75 });
+    }
+    const id =
+      (spot._id && spot._id.toString && spot._id.toString()) ||
+      spot.id;
+    const m = markerRefs.current[id];
+    if (m && m.openPopup) {
+      // open after the flyTo starts for better UX
+      setTimeout(() => m.openPopup(), 300);
+    }
+  };
+
 
 /**
    * Fetches all spots from the backend on mount (for initial map display).
@@ -348,14 +416,23 @@ function App() {
           </div>
         )}
 
-        <MapContainer center={defaultCenter} zoom={13} style={{ height: "500px", width: "100%" }}>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+<div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
   {/* LEFT: filter panel (names only) */}
-  <FilterPanel spots={spots} />
+  <FilterPanel
+    spots={spots}
+    onSelectSpot={focusSpot}
+    collapsed={panelCollapsed}
+    setCollapsed={setPanelCollapsed}
+  />
 
-  {/* RIGHT: your original map */}
+  {/* RIGHT: the ONE map */}
   <div style={{ flex: 1 }}>
-    <MapContainer center={defaultCenter} zoom={13} style={{ height: "500px", width: "100%" }}>
+    <MapContainer
+      center={defaultCenter}
+      zoom={13}
+      style={{ height: "500px", width: "100%" }}
+      whenCreated={(map) => { mapRef.current = map; }}
+    >
       <TileLayer
         attribution='&copy; <a href="https://osm.org/copyright">OpenStreetMap</a> contributors'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -377,27 +454,33 @@ function App() {
         </Marker>
       )}
 
-      {spots.map((spot, idx) => (
-        <Marker
-          key={(spot._id && spot._id.toString && spot._id.toString()) || spot.id || idx}
-          position={[spot.coordinates[1], spot.coordinates[0]]}
-          icon={vividIcon}
-        >
-          <Popup>
-            <SpotPopup
-              spot={spot}
-              apiBaseUrl={apiBaseUrl}
-              loggedIn={loggedIn}
-              currentUser={currentUser}
-            />
-          </Popup>
-        </Marker>
-      ))}
+      {spots.map((spot, idx) => {
+        const id =
+          (spot._id && spot._id.toString && spot._id.toString()) ||
+          spot.id || idx;
+
+        return (
+          <Marker
+            key={id}
+            ref={(ref) => { if (ref) markerRefs.current[id] = ref; }}
+            position={[spot.coordinates[1], spot.coordinates[0]]}
+            icon={vividIcon}
+          >
+            <Popup>
+              <SpotPopup
+                spot={spot}
+                apiBaseUrl={apiBaseUrl}
+                loggedIn={loggedIn}
+                currentUser={currentUser}
+              />
+            </Popup>
+          </Marker>
+        );
+      })}
     </MapContainer>
   </div>
 </div>
 
-        </MapContainer>
 
         {clickedCoords && (
           <div style={{ marginTop: '20px', padding: '10px', border: '1px solid #ccc', borderRadius: '8px' }}>
