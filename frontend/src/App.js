@@ -223,6 +223,7 @@ function App() {
   const [spots, setSpots] = useState([]);
   const [clickedCoords, setClickedCoords] = useState(null);
     // Map + marker refs, and panel collapse state
+  const [likesBySpot, setLikesBySpot] = useState({});
   const mapRef = useRef(null);
   const markerRefs = useRef({});     // { [id]: L.Marker }
   const [panelCollapsed, setPanelCollapsed] = useState(false);
@@ -256,6 +257,49 @@ function App() {
       .then(data => setSpots(data.spots || []))
       .catch(() => setSpots([]));
   }, [apiBaseUrl]);
+
+
+  useEffect(() => {
+    if (!spots || spots.length === 0) {
+      setLikesBySpot({});
+      return;
+    }
+    let cancelled = false;
+  
+    (async () => {
+      try {
+        // fetch counts in parallel (cap to first 100 to be safe)
+        const subset = spots.slice(0, 100);
+        const entries = await Promise.all(
+          subset.map(async (s, idx) => {
+            const id =
+              (s._id && s._id.toString && s._id.toString()) ||
+              s.id || String(idx);
+  
+            try {
+              const r = await fetch(`${apiBaseUrl}/api/spots/${encodeURIComponent(id)}/likes`);
+              if (!r.ok) return [id, 0];
+              const { count } = await r.json();
+              return [id, typeof count === 'number' ? count : 0];
+            } catch {
+              return [id, 0];
+            }
+          })
+        );
+  
+        if (!cancelled) {
+          const map = {};
+          for (const [id, count] of entries) map[id] = count;
+          setLikesBySpot(map);
+        }
+      } catch {
+        // ignore network errors; list will fall back to 0 likes
+      }
+    })();
+  
+    return () => { cancelled = true; };
+  }, [spots, apiBaseUrl]);
+  
 
  /**
    * Fetches spots within 1 mile of the clicked coordinates using the bounding box API.
@@ -482,23 +526,56 @@ function App() {
 </div>
 
 
-        {clickedCoords && (
-          <div style={{ marginTop: '20px', padding: '10px', border: '1px solid #ccc', borderRadius: '8px' }}>
-            <h3>Around your clicked coords</h3>
-            {spots.length === 0 ? (
-              <p>No spots within 1 mile.</p>
-            ) : (
-              <ul>
-                {spots.map((spot, idx) => (
-                  <li key={idx}>
-                    <strong>{spot.name}</strong><br />
-                    Lat: {spot.coordinates[1].toFixed(6)}, Lng: {spot.coordinates[0].toFixed(6)}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
+{clickedCoords && (
+  <div style={{ marginTop: 20, padding: 12, border: '1px solid #ccc', borderRadius: 8 }}>
+    <h3 style={{ marginTop: 0 }}>Top 5 spots near you</h3>
+
+    {(() => {
+      if (!Array.isArray(spots) || spots.length === 0) {
+        return <p>No spots within 1 mile.</p>;
+      }
+
+      // build sortable array with like counts (fallback 0) and (optional) distance
+      const data = spots.map((s, idx) => {
+        const id =
+          (s._id && s._id.toString && s._id.toString()) ||
+          s.id || String(idx);
+        const likes = likesBySpot[id] ?? 0;
+        const dist = haversineDistance(
+          clickedCoords[0], clickedCoords[1],
+          s.coordinates[1], s.coordinates[0]
+        );
+        return { s, id, likes, dist };
+      });
+
+      // sort by likes desc, then distance asc for tie-break
+      data.sort((a, b) => (b.likes - a.likes) || (a.dist - b.dist));
+
+      const top5 = data.slice(0, 5);
+
+      if (top5.length === 0) {
+        return <p>No spots within 1 mile.</p>;
+      }
+
+      return (
+        <ol style={{ margin: 0, paddingLeft: 20 }}>
+          {top5.map(({ s, id, likes }) => (
+            <li key={id} style={{ marginBottom: 8 }}>
+              <strong>{s.name}</strong>
+              <span style={{ marginLeft: 6, opacity: 0.7 }}>
+                • {likes} like{likes === 1 ? '' : 's'}
+              </span>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>
+                Lat: {s.coordinates[1].toFixed(6)}, Lng: {s.coordinates[0].toFixed(6)}
+              </div>
+            </li>
+          ))}
+        </ol>
+      );
+    })()}
+  </div>
+)}
+
 
         {/* Optionally show messages when not logged in */}
         {!loggedIn && message && <p>{message}</p>}
