@@ -234,7 +234,6 @@ function FilterPanel({ spots, onSelectSpot, collapsed, setCollapsed }) {
 }
 
 
-
 function App() {
   const RATING_PREFIX = '__RATING__:';
 
@@ -284,6 +283,36 @@ function App() {
     }
   };
 
+
+  /**
+   * Handles Google login success by sending the credential to the backend for verification.
+   */
+  const handleGoogleSuccess = async (credentialResponse) => {
+    try {
+      const response = await fetch(`${apiBaseUrl}/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ token: credentialResponse.credential })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        console.log('User logged in:', data.user);
+        setLoggedIn(true);
+        setMessage('Logged in!');
+        setCurrentUser(data.user); // <-- save user (has email/name/picture)
+        try { localStorage.setItem('ofm_user', JSON.stringify(data.user)); } catch {}
+      }
+      
+      else {
+        setMessage('Login failed');
+      }
+    } catch (error) {
+      console.error('Login failed:', error);
+      setMessage('Login failed');
+    }
+  };
 
 /**
    * Fetches all spots from the backend on mount (for initial map display).
@@ -351,40 +380,7 @@ function App() {
       .then(data => setSpots(Array.isArray(data) ? data : []))
       .catch(() => setSpots([]));
   }, [clickedCoords, apiBaseUrl]);
-
-  console.log('Google Client ID loaded:', googleClientId ? 'Yes' : 'No');
-  /**
-   * Handles Google login success by sending the credential to the backend for verification.
-   */
-
-  const handleGoogleSuccess = async (credentialResponse) => {
-    try {
-      const response = await fetch(`${apiBaseUrl}/auth/google`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ token: credentialResponse.credential })
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        console.log('User logged in:', data.user);
-        setLoggedIn(true);
-        setMessage('Logged in!');
-        setCurrentUser(data.user); // <-- save user (has email/name/picture)
-        try { localStorage.setItem('ofm_user', JSON.stringify(data.user)); } catch {}
-      }
-      
-      else {
-        setMessage('Login failed');
-      }
-    } catch (error) {
-      console.error('Login failed:', error);
-      setMessage('Login failed');
-    }
-  };
-
-
+  
 /**
    * Handles form submission for adding a new spot to the backend.
    */
@@ -439,11 +435,12 @@ function App() {
   return (
     <GoogleOAuthProvider clientId={googleClientId}>
       <div className="App">
-        <GoogleLogin
-          onSuccess={handleGoogleSuccess}
-          onError={() => console.log('Login Failed')}
-        />
-
+        {!loggedIn && (
+            <GoogleLogin
+            onSuccess={handleGoogleSuccess}
+            onError={() => console.log('Login Failed')}
+            />
+         )}
              {/* Show the form only if logged in */}
         {loggedIn && (
           <>
@@ -496,8 +493,10 @@ function App() {
             Clicked Coordinates: Lat {clickedCoords[0].toFixed(6)}, Lng {clickedCoords[1].toFixed(6)}
           </div>
         )}
+  
 
 <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+  
   {/* LEFT: filter panel (names only) */}
   <FilterPanel
     spots={spots}

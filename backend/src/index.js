@@ -40,8 +40,8 @@ let db;
 
 // Rate limiting
 const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // 100 requests per window
+  windowMs: 1 * 60 * 1000, // 1 minutes
+  max: 1000, // 100 requests per window
   message: { error: 'Too many requests' }
 });
 
@@ -122,7 +122,7 @@ function generateSessionId() {
 // rate limiting
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // 5 attempts per window
+  max: 50, // 5 attempts per window
   message: { error: 'Too many auth attempts' }
 });
 
