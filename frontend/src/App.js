@@ -71,6 +71,9 @@ function FilterPanel({ spots, onSelectSpot, collapsed, setCollapsed }) {
   // category checkboxes (client-side only)
   const CATEGORIES = ['general', 'landmark', 'cafe', 'park', 'study', 'food'];
 
+  const [textQuery, setTextQuery] = React.useState('');
+
+
   const [pending, setPending] = React.useState(new Set());   // boxes currently checked
   const [applied, setApplied] = React.useState(new Set());   // what the list uses
 
@@ -86,11 +89,22 @@ function FilterPanel({ spots, onSelectSpot, collapsed, setCollapsed }) {
   const apply = () => setApplied(new Set(pending));
   const clear = () => { setPending(new Set()); setApplied(new Set()); };
 
-  // if no category is applied, show all spots
-  const filtered = useMemo(() => {
+  // 1) Category filter
+  const catFiltered = React.useMemo(() => {
     if (!applied || applied.size === 0) return spots;
     return spots.filter(s => applied.has((s?.type || 'general')));
   }, [spots, applied]);
+
+  // 2) Text filter
+  const filtered = React.useMemo(() => {
+    const q = textQuery.trim().toLowerCase();
+    if (!q) return catFiltered;
+    return catFiltered.filter(s =>
+      (s?.name || '').toLowerCase().includes(q) ||
+      (s?.type || '').toLowerCase().includes(q)
+    );
+  }, [catFiltered, textQuery]);
+
 
   // Collapsed (mini) view
   if (collapsed) {
@@ -168,6 +182,29 @@ function FilterPanel({ spots, onSelectSpot, collapsed, setCollapsed }) {
       <div style={{ fontWeight: 600, marginTop: 4 }}>
         Results {applied.size > 0 ? `(${Array.from(applied).join(', ')})` : '(All)'} — {filtered.length}
       </div>
+
+      <div style={{ marginTop: 8 }}>
+        <input
+          type="text"
+          placeholder="Search spots by name…"
+          value={textQuery}
+          onChange={(e) => setTextQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              const first = filtered[0];
+              if (first) onSelectSpot(first); // focus + open popup
+            }
+          }}
+          style={{
+            width: '100%',
+            padding: '6px 8px',
+            border: '1px solid #ddd',
+            borderRadius: 6,
+            outline: 'none'
+          }}
+        />
+      </div>
+
 
       {/* Names-only list (CLICKABLE) */}
       <div style={{ overflowY: 'auto', border: '1px solid #eee', borderRadius: 8, padding: 8 }}>
@@ -598,6 +635,48 @@ function SpotPopup({ spot, apiBaseUrl, loggedIn }) {
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState('');
 
+
+  // ——— User stats viewer state ———
+const [statsOpenId, setStatsOpenId] = React.useState(null); // googleId selected
+const [statsData, setStatsData] = React.useState(null);
+const [statsLoading, setStatsLoading] = React.useState(false);
+const [statsError, setStatsError] = React.useState('');
+
+// Opens a small card with the user's stats
+const openUserStats = async (googleId) => {
+  if (!loggedIn) {
+    setError('Please sign in to view user profiles.');
+    return;
+  }
+  setStatsOpenId(googleId);
+  setStatsData(null);
+  setStatsError('');
+  setStatsLoading(true);
+  try {
+    const r = await fetch(`${apiBaseUrl}/api/users/${encodeURIComponent(googleId)}`, {
+      credentials: 'include'
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.error || 'Failed to load user profile');
+    }
+    const { user } = await r.json();
+    setStatsData({
+      googleId: user.googleId,
+      name: user.name,
+      email: user.email,
+      picture: user.picture,
+      spotsCreated: user.statistics?.spotsCreated ?? 0,
+      likesGiven: user.statistics?.likesGiven ?? 0,
+    });
+  } catch (e) {
+    setStatsError(e.message || 'Error loading user profile');
+  } finally {
+    setStatsLoading(false);
+  }
+};
+
+
   // Likes
   const [likeCount, setLikeCount] = React.useState(0);
   const [iLikeIt, setILikeIt] = React.useState(false);
@@ -705,12 +784,16 @@ function SpotPopup({ spot, apiBaseUrl, loggedIn }) {
   // Helpers
   const labelFor = (c) => {
     const u = userMap[c.user_id];
-    if (u?.email) return u.email;     // ← show email first
+    if (u?.email) {
+      // only show before the @
+      return u.email.split('@')[0];
+    }
     if (u?.name) return u.name;
     if (me?.googleId && c.user_id === me.googleId) return 'You';
     const tail = (c.user_id && String(c.user_id).slice(-6)) || 'user';
     return `User · ${tail}`;
   };
+  
   
 
   // Actions
@@ -828,11 +911,26 @@ function SpotPopup({ spot, apiBaseUrl, loggedIn }) {
           {visibleComments.map(c => (
             <li key={c._id} style={{ marginBottom: 10, paddingLeft: c.depth * 12 }}>
               <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 2 }}>
-                {labelFor(c)} • {new Date(c.created_at).toLocaleString()}
+                <button
+                  onClick={() => openUserStats(c.user_id)}
+                  title="View user stats"
+                  style={{
+                    padding: '2px 6px',
+                    border: '1px solid #ddd',
+                    borderRadius: 6,
+                    background: '#fff',
+                    cursor: 'pointer',
+                    marginRight: 6
+                  }}
+                >
+                  {labelFor(c)}
+                </button>
+                • {new Date(c.created_at).toLocaleString()}
               </div>
+
               <div style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>{c.text}</div>
 
-              {/* Reply toggle + box */}
+              {}
               <div style={{ marginTop: 4 }}>
                 <button
                   onClick={() => setReplyOpen(prev => ({ ...prev, [c._id]: !prev[c._id] }))}
@@ -866,6 +964,59 @@ function SpotPopup({ spot, apiBaseUrl, loggedIn }) {
           ))}
         </ul>
       )}
+
+      {/* User stats card */}
+{statsOpenId && (
+  <div
+    style={{
+      marginTop: 10,
+      border: '1px solid #e5e5e5',
+      borderRadius: 8,
+      padding: 10,
+      background: '#fafafa'
+    }}
+  >
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <strong>User details</strong>
+      <button
+        onClick={() => { setStatsOpenId(null); setStatsData(null); setStatsError(''); }}
+        style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 16 }}
+        aria-label="Close user details"
+        title="Close"
+      >
+        ✕
+      </button>
+    </div>
+
+        {statsLoading && <div>Loading…</div>}
+        {statsError && <div style={{ color: 'crimson' }}>{statsError}</div>}
+
+        {(!statsLoading && !statsError && statsData) && (
+          <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+            {statsData.picture && (
+              <img
+                src={statsData.picture}
+                alt={statsData.email || statsData.name || statsData.googleId}
+                width={36}
+                height={36}
+                style={{ borderRadius: '50%', objectFit: 'cover' }}
+              />
+            )}
+            <div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>
+              {statsData.email
+                ? statsData.email.split('@')[0]   // show only prefix
+                : statsData.name || `User ${String(statsData.googleId).slice(-6)}`}
+            </div>
+              <div style={{ fontSize: 13, opacity: 0.8 }}>
+                Spots created: <strong>{statsData.spotsCreated}</strong> • Likes given: <strong>{statsData.likesGiven}</strong>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    )}
+
 
       {/* Add new top-level comment */}
       <div style={{ marginTop: 8 }}>

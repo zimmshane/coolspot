@@ -873,11 +873,9 @@ app.get('/api/users/:googleId',
             email: 1,
             name: 1,
             picture: 1,
-            created_on: 1,
-            // Exclude sensitive fields
-            refreshToken: 0,
-            accessToken: 0
+            created_on: 1
           }
+          
         }
       );
 
