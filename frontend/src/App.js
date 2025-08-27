@@ -410,14 +410,25 @@ function App() {
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '24px'}}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <img src="/compass.jpeg" alt="Compass" style={{ width: '40px', height: '40px' }} />
-          <h1 style={{ margin: 0, color: '#e5fb1dff', fontSize: '10rem'  }}>CoolSpot</h1>
+          <h1 style={{ margin: 0, color: '#e5fb1dff', fontSize: '2rem'  }}>CoolSpot</h1>
         </div>
         <div style={{ fontSize: '1rem', color: '#555', marginTop: '4px' }}>
           Discover cool spots authentically
         </div>
       </div>
 
-        {!loggedIn && <h2>You must be logged in to access features</h2>}
+        {!loggedIn && <h2
+          style={{
+            background: '#ffe600',
+            color: '#222',
+            padding: '12px 20px',
+            borderRadius: '8px',
+            margin: '16px auto',
+            maxWidth: 420,
+            fontWeight: 700,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.07)'
+          }}
+        >You must be logged in to access features</h2>}
 
         <GoogleLogin
           onSuccess={handleGoogleSuccess}
