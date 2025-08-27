@@ -1,5 +1,5 @@
 import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMapEvent  } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -67,7 +67,96 @@ function getBoundingBox(lat, lng, miles) {
   };
 }
 
+function FilterPanel({ spots }) {
+  // category checkboxes (client-side only)
+  const CATEGORIES = ['general', 'landmark', 'cafe', 'park', 'study', 'food'];
+
+  const [pending, setPending] = React.useState(new Set());   // boxes currently checked
+  const [applied, setApplied] = React.useState(new Set());   // what the list uses
+
+  const toggle = (cat) => {
+    setPending(prev => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
+      return next;
+    });
+  };
+
+  const apply = () => setApplied(new Set(pending));
+  const clear = () => { setPending(new Set()); setApplied(new Set()); };
+
+  // if no category is applied, show all spots
+  const filtered = useMemo(() => {
+    if (!applied || applied.size === 0) return spots;
+    return spots.filter(s => applied.has((s?.type || 'general')));
+  }, [spots, applied]);
+
+  return (
+    <aside
+      style={{
+        width: 280,
+        minWidth: 280,
+        maxHeight: 520,
+        border: '1px solid #ddd',
+        borderRadius: 10,
+        padding: 12,
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        background: '#fff'
+      }}
+    >
+      <div style={{ fontWeight: 700, fontSize: 16 }}>Filter</div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', rowGap: 6, columnGap: 8 }}>
+        {CATEGORIES.map(cat => (
+          <label key={cat} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14 }}>
+            <input
+              type="checkbox"
+              checked={pending.has(cat)}
+              onChange={() => toggle(cat)}
+            />
+            {cat.charAt(0).toUpperCase() + cat.slice(1)}
+          </label>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={apply}>Search</button>
+        <button onClick={clear} disabled={pending.size === 0 && applied.size === 0}>Clear</button>
+      </div>
+
+      <div style={{ fontWeight: 600, marginTop: 4 }}>
+        Results {applied.size > 0 ? `(${Array.from(applied).join(', ')})` : '(All)'} — {filtered.length}
+      </div>
+
+      {/* Names-only list */}
+      <div style={{ overflowY: 'auto', border: '1px solid #eee', borderRadius: 8, padding: 8 }}>
+        {filtered.length === 0 ? (
+          <div style={{ opacity: 0.7, fontStyle: 'italic' }}>No spots.</div>
+        ) : (
+          <ul style={{ margin: 0, paddingLeft: 16 }}>
+            {filtered.map((spot, idx) => (
+              <li
+                key={(spot._id && spot._id.toString && spot._id.toString()) || spot.id || idx}
+                style={{ marginBottom: 6 }}
+              >
+                {spot.name}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+
 function App() {
+  const RATING_PREFIX = '__RATING__:';
+
   const googleClientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
   const apiBaseUrl = process.env.REACT_APP_API_BASE_URL;
 
@@ -77,6 +166,15 @@ function App() {
   const [lng, setLng] = useState('');
   const [type, setType] = useState('general');
   const [message, setMessage] = useState('');
+    const [currentUser, setCurrentUser] = useState(() => {
+      try {
+        const raw = localStorage.getItem('ofm_user');
+        return raw ? JSON.parse(raw) : null; 
+      } catch {
+        return null;
+      }
+    });
+  
 
   const [spots, setSpots] = useState([]);
   const [clickedCoords, setClickedCoords] = useState(null);
@@ -124,7 +222,10 @@ function App() {
         console.log('User logged in:', data.user);
         setLoggedIn(true);
         setMessage('Logged in!');
+        setCurrentUser(data.user); // <-- save user (has email/name/picture)
+        try { localStorage.setItem('ofm_user', JSON.stringify(data.user)); } catch {}
       }
+      
       else {
         setMessage('Login failed');
       }
@@ -265,40 +366,53 @@ function App() {
         )}
 
         <MapContainer center={defaultCenter} zoom={13} style={{ height: "500px", width: "100%" }}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+  {/* LEFT: filter panel (names only) */}
+  <FilterPanel spots={spots} />
 
-          <TileLayer
-            attribution='&copy; <a href="https://osm.org/copyright">OpenStreetMap</a> contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
+  {/* RIGHT: your original map */}
+  <div style={{ flex: 1 }}>
+    <MapContainer center={defaultCenter} zoom={13} style={{ height: "500px", width: "100%" }}>
+      <TileLayer
+        attribution='&copy; <a href="https://osm.org/copyright">OpenStreetMap</a> contributors'
+        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+      />
 
-          <ClickHandler 
-          setClickedCoords={setClickedCoords} 
-          setLat={setLat} 
-          setLng={setLng} />
+      <ClickHandler
+        setClickedCoords={setClickedCoords}
+        setLat={setLat}
+        setLng={setLng}
+      />
 
-          {clickedCoords && (
-            <Marker position={clickedCoords} icon={yellowIcon}>
-              <Popup autoOpen={true}>
-                <b>Selected Location</b><br />
-                Lat: {clickedCoords[0].toFixed(6)}<br />
-                Lng: {clickedCoords[1].toFixed(6)}
-              </Popup>
-            </Marker>
-          )}
+      {clickedCoords && (
+        <Marker position={clickedCoords} icon={yellowIcon}>
+          <Popup autoOpen={true}>
+            <b>Selected Location</b><br />
+            Lat: {clickedCoords[0].toFixed(6)}<br />
+            Lng: {clickedCoords[1].toFixed(6)}
+          </Popup>
+        </Marker>
+      )}
 
-          {spots.map((spot, idx) => (
-            <Marker
-              key={idx}
-              position={[spot.coordinates[1], spot.coordinates[0]]}
-              icon={vividIcon}
-            >
-              <Popup>
-                <b>{spot.name}</b><br />
-                Type: {spot.type}
-              </Popup>
-
-            </Marker>
-          ))}
+      {spots.map((spot, idx) => (
+        <Marker
+          key={(spot._id && spot._id.toString && spot._id.toString()) || spot.id || idx}
+          position={[spot.coordinates[1], spot.coordinates[0]]}
+          icon={vividIcon}
+        >
+          <Popup>
+            <SpotPopup
+              spot={spot}
+              apiBaseUrl={apiBaseUrl}
+              loggedIn={loggedIn}
+              currentUser={currentUser}
+            />
+          </Popup>
+        </Marker>
+      ))}
+    </MapContainer>
+  </div>
+</div>
 
         </MapContainer>
 
@@ -327,5 +441,311 @@ function App() {
     </GoogleOAuthProvider>
   );
 }
+
+
+function SpotPopup({ spot, apiBaseUrl, loggedIn }) {
+  // silently hide any old rating meta-comments that might exist in DB
+  const isHiddenMeta = (t) => typeof t === 'string' && t.startsWith('__RATING__:');
+
+  const [comments, setComments] = React.useState([]);
+  const [newComment, setNewComment] = React.useState('');
+  const [replyOpen, setReplyOpen] = React.useState({}); // { [commentId]: bool }
+  const [replyText, setReplyText] = React.useState({}); // { [commentId]: string }
+  const [loading, setLoading] = React.useState(true);
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState('');
+
+  // Likes
+  const [likeCount, setLikeCount] = React.useState(0);
+  const [iLikeIt, setILikeIt] = React.useState(false);
+
+  // Current viewer (for labeling "You")
+  const [me, setMe] = React.useState(null); // { googleId }
+
+  // Cache user profiles { [googleId]: {name, email, picture} }
+  const [userMap, setUserMap] = React.useState({});
+
+  const spotId =
+    (spot._id && spot._id.toString && spot._id.toString()) ||
+    spot.id;
+
+  // Load current viewer's googleId (for "You" label)
+  React.useEffect(() => {
+    if (!loggedIn) return;
+    (async () => {
+      try {
+        const res = await fetch(`${apiBaseUrl}/api/profile`, { credentials: 'include' });
+        if (res.ok) {
+          const data = await res.json();
+          setMe({ googleId: data.user.googleId });
+        }
+      } catch {/* ignore */}
+    })();
+  }, [apiBaseUrl, loggedIn]);
+
+  // Load comments and then fetch missing author profiles via /api/users/:googleId
+  const loadComments = React.useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/spots/${spotId}/comments`, {
+        credentials: 'include'
+      });
+      if (!res.ok) throw new Error('Failed to load comments');
+
+      const thread = await res.json();
+
+      // Flatten thread while keeping depth for indentation
+      const flat = [];
+      const walk = (n, depth = 0) => {
+        flat.push({ ...n, depth });
+        (n.replies || []).forEach(r => walk(r, depth + 1));
+      };
+      (thread || []).forEach(n => walk(n));
+      setComments(flat);
+
+      // Fetch author profiles we don't have yet (route is auth-protected)
+      const ids = [...new Set(flat.map(c => c.user_id).filter(Boolean))];
+      const missing = ids.filter(id => !userMap[id]);
+
+      if (loggedIn && missing.length) {
+        const results = await Promise.all(
+          missing.map(async (id) => {
+            const r = await fetch(`${apiBaseUrl}/api/users/${encodeURIComponent(id)}`, {
+              credentials: 'include'
+            });
+            if (!r.ok) return [id, null];
+            const { user } = await r.json();
+            return [id, { name: user.name, email: user.email, picture: user.picture }];
+          })
+        );
+        setUserMap(prev => {
+          const next = { ...prev };
+          for (const [id, info] of results) {
+            if (info) next[id] = info;
+          }
+          return next;
+        });
+      }
+    } catch (e) {
+      setError(e.message || 'Error loading comments');
+    } finally {
+      setLoading(false);
+    }
+  }, [apiBaseUrl, spotId, loggedIn]); // don't depend on userMap to avoid extra reloads
+
+  // Load likes (count + my status)
+  const loadLikes = React.useCallback(async () => {
+    try {
+      const c = await fetch(`${apiBaseUrl}/api/spots/${spotId}/likes`);
+      if (c.ok) {
+        const { count } = await c.json();
+        setLikeCount(count ?? 0);
+      }
+      if (loggedIn) {
+        const m = await fetch(`${apiBaseUrl}/api/spots/${spotId}/likes/check`, { credentials: 'include' });
+        if (m.ok) {
+          const { liked } = await m.json();
+          setILikeIt(!!liked);
+        }
+      } else {
+        setILikeIt(false);
+      }
+    } catch {/* ignore */}
+  }, [apiBaseUrl, spotId, loggedIn]);
+
+  React.useEffect(() => {
+    loadComments();
+    loadLikes();
+  }, [loadComments, loadLikes]);
+
+  // Helpers
+  const labelFor = (c) => {
+    const u = userMap[c.user_id];
+    if (u?.email) return u.email;     // ← show email first
+    if (u?.name) return u.name;
+    if (me?.googleId && c.user_id === me.googleId) return 'You';
+    const tail = (c.user_id && String(c.user_id).slice(-6)) || 'user';
+    return `User · ${tail}`;
+  };
+  
+
+  // Actions
+  const postComment = async () => {
+    if (!loggedIn) return setError('Please sign in to comment.');
+    if (!newComment.trim()) return;
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/spots/${spotId}/comments`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: newComment })
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || 'Failed to post comment');
+      }
+      setNewComment('');
+      await loadComments();
+    } catch (e) {
+      setError(e.message || 'Error posting comment');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const postReply = async (parentId) => {
+    if (!loggedIn) return setError('Please sign in to reply.');
+    const text = (replyText[parentId] || '').trim();
+    if (!text) return;
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/spots/${spotId}/comments`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, parentCommentId: parentId })
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || 'Failed to post reply');
+      }
+      setReplyText(prev => ({ ...prev, [parentId]: '' }));
+      setReplyOpen(prev => ({ ...prev, [parentId]: false }));
+      await loadComments();
+    } catch (e) {
+      setError(e.message || 'Error posting reply');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleLike = async () => {
+    if (!loggedIn) return setError('Please sign in to like.');
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/spots/${spotId}/likes`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || 'Failed to toggle like');
+      }
+      await loadLikes();
+    } catch (e) {
+      setError(e.message || 'Error toggling like');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Hide any old rating meta-comments (keeps UI free of rating mentions)
+  const visibleComments = comments.filter(c => !isHiddenMeta(c.text));
+
+  return (
+    <div style={{ minWidth: 260, maxWidth: 340 }}>
+      <div style={{ marginBottom: 8 }}>
+        <strong>{spot.name}</strong><br />
+        <small>Type: {spot.type}</small>
+      </div>
+
+      {/* Likes */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <button
+          onClick={toggleLike}
+          disabled={!loggedIn || saving}
+          title={loggedIn ? (iLikeIt ? 'Unlike' : 'Like') : 'Sign in to like'}
+          style={{ cursor: loggedIn ? 'pointer' : 'not-allowed' }}
+        >
+          {iLikeIt ? '♥ Unlike' : '♡ Like'}
+        </button>
+        <span style={{ fontSize: 12, opacity: 0.75 }}>
+          {likeCount} like{likeCount === 1 ? '' : 's'}
+        </span>
+      </div>
+
+      {/* Comments & replies */}
+      <div style={{ marginBottom: 6 }}>
+        <strong>Comments</strong>
+      </div>
+      {loading ? (
+        <div>Loading…</div>
+      ) : error ? (
+        <div style={{ color: 'crimson' }}>{error}</div>
+      ) : visibleComments.length === 0 ? (
+        <div style={{ fontStyle: 'italic', opacity: 0.7 }}>No comments yet.</div>
+      ) : (
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0, maxHeight: 180, overflowY: 'auto' }}>
+          {visibleComments.map(c => (
+            <li key={c._id} style={{ marginBottom: 10, paddingLeft: c.depth * 12 }}>
+              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 2 }}>
+                {labelFor(c)} • {new Date(c.created_at).toLocaleString()}
+              </div>
+              <div style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>{c.text}</div>
+
+              {/* Reply toggle + box */}
+              <div style={{ marginTop: 4 }}>
+                <button
+                  onClick={() => setReplyOpen(prev => ({ ...prev, [c._id]: !prev[c._id] }))}
+                  disabled={!loggedIn || saving}
+                  style={{ fontSize: 12 }}
+                >
+                  {replyOpen[c._id] ? 'Cancel' : 'Reply'}
+                </button>
+              </div>
+
+              {replyOpen[c._id] && (
+                <div style={{ marginTop: 6 }}>
+                  <textarea
+                    rows={2}
+                    value={replyText[c._id] || ''}
+                    onChange={e => setReplyText(prev => ({ ...prev, [c._id]: e.target.value }))}
+                    placeholder={loggedIn ? 'Write a reply…' : 'Sign in to reply'}
+                    disabled={!loggedIn || saving}
+                    style={{ width: '100%' }}
+                  />
+                  <button
+                    onClick={() => postReply(c._id)}
+                    disabled={!loggedIn || saving || !(replyText[c._id] || '').trim()}
+                    style={{ marginTop: 4 }}
+                  >
+                    Post reply
+                  </button>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* Add new top-level comment */}
+      <div style={{ marginTop: 8 }}>
+        <textarea
+          rows={2}
+          value={newComment}
+          onChange={e => setNewComment(e.target.value)}
+          placeholder={loggedIn ? 'Write a comment…' : 'Sign in to comment'}
+          disabled={!loggedIn || saving}
+          style={{ width: '100%' }}
+        />
+        <button
+          onClick={postComment}
+          disabled={!loggedIn || saving || !newComment.trim()}
+          style={{ marginTop: 6 }}
+        >
+          Post
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
 
 export default App;
