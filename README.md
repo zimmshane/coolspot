@@ -4,7 +4,7 @@ A location-centric social media platform for discovering and sharing interesting
 
 ## Prerequisites
 
-Node.js (version not specified - testing recommended with latest LTS)
+Node.js (recommended with latest LTS)
 MongoDB instance
 Google OAuth credentials
 Quick Start
